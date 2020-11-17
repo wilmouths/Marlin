@@ -393,7 +393,7 @@ volatile bool Temperature::raw_temps_ready = false;
     long t_high = 0, t_low = 0;
 
     long bias, d;
-    PID_t tune_pid = { 0, 0, 0 };
+    PID_t pid_array[ncycles];
     float maxT = 0, minT = 10000;
 
     const bool isbed = (heater_id == H_BED);
@@ -500,6 +500,9 @@ volatile bool Temperature::raw_temps_ready = false;
               LIMIT(bias, 20, max_pow - 20);
               d = (bias > max_pow >> 1) ? max_pow - 1 - bias : bias;
 
+              pid_array[cycles].min = minT;
+              pid_array[cycles].max = maxT;
+
               SERIAL_ECHOPAIR(STR_BIAS, bias, STR_D_COLON, d, STR_T_MIN, minT, STR_T_MAX, maxT);
               if (cycles > 2) {
                 const float Ku = (4.0f * d) / (float(M_PI) * (maxT - minT) * 0.5f),
@@ -509,30 +512,30 @@ volatile bool Temperature::raw_temps_ready = false;
 
                 SERIAL_ECHOPAIR(STR_KU, Ku, STR_TU, Tu);
                 if (isbed) { // Do not remove this otherwise PID autotune won't work right for the bed!
-                  tune_pid.Kp = Ku * 0.2f;
-                  tune_pid.Ki = 2 * tune_pid.Kp / Tu;
-                  tune_pid.Kd = tune_pid.Kp * Tu / 3;
+                  pid_array[cycles].Kp = Ku * 0.2f;
+                  pid_array[cycles].Ki = 2 * pid_array[cycles].Kp / Tu;
+                  pid_array[cycles].Kd = pid_array[cycles].Kp * Tu / 3;
                   SERIAL_ECHOLNPGM("\n" " No overshoot"); // Works far better for the bed. Classic and some have bad ringing.
-                  SERIAL_ECHOLNPAIR(STR_KP, tune_pid.Kp, STR_KI, tune_pid.Ki, STR_KD, tune_pid.Kd);
+                  SERIAL_ECHOLNPAIR(STR_KP, pid_array[cycles].Kp, STR_KI, pid_array[cycles].Ki, STR_KD, pid_array[cycles].Kd);
                 }
                 else {
-                  tune_pid.Kp = Ku * pf;
-                  tune_pid.Kd = tune_pid.Kp * Tu * df;
-                  tune_pid.Ki = 2 * tune_pid.Kp / Tu;
+                  pid_array[cycles].Kp = Ku * pf;
+                  pid_array[cycles].Kd = pid_array[cycles].Kp * Tu * df;
+                  pid_array[cycles].Ki = 2 * pid_array[cycles].Kp / Tu;
                   SERIAL_ECHOLNPGM("\n" STR_CLASSIC_PID);
-                  SERIAL_ECHOLNPAIR(STR_KP, tune_pid.Kp, STR_KI, tune_pid.Ki, STR_KD, tune_pid.Kd);
+                  SERIAL_ECHOLNPAIR(STR_KP, pid_array[cycles].Kp, STR_KI, pid_array[cycles].Ki, STR_KD, pid_array[cycles].Kd);
                 }
 
                 /**
-                tune_pid.Kp = 0.33 * Ku;
-                tune_pid.Ki = tune_pid.Kp / Tu;
-                tune_pid.Kd = tune_pid.Kp * Tu / 3;
+                pid_array[cycles].Kp = 0.33 * Ku;
+                pid_array[cycles].Ki = pid_array[cycles].Kp / Tu;
+                pid_array[cycles].Kd = pid_array[cycles].Kp * Tu / 3;
                 SERIAL_ECHOLNPGM(" Some overshoot");
-                SERIAL_ECHOLNPAIR(" Kp: ", tune_pid.Kp, " Ki: ", tune_pid.Ki, " Kd: ", tune_pid.Kd, " No overshoot");
-                tune_pid.Kp = 0.2 * Ku;
-                tune_pid.Ki = 2 * tune_pid.Kp / Tu;
-                tune_pid.Kd = tune_pid.Kp * Tu / 3;
-                SERIAL_ECHOPAIR(" Kp: ", tune_pid.Kp, " Ki: ", tune_pid.Ki, " Kd: ", tune_pid.Kd);
+                SERIAL_ECHOLNPAIR(" Kp: ", pid_array[cycles].Kp, " Ki: ", pid_array[cycles].Ki, " Kd: ", pid_array[cycles].Kd, " No overshoot");
+                pid_array[cycles].Kp = 0.2 * Ku;
+                pid_array[cycles].Ki = 2 * pid_array[cycles].Kp / Tu;
+                pid_array[cycles].Kd = pid_array[cycles].Kp * Tu / 3;
+                SERIAL_ECHOPAIR(" Kp: ", pid_array[cycles].Kp, " Ki: ", pid_array[cycles].Ki, " Kd: ", pid_array[cycles].Kd);
                 */
               }
             }
@@ -592,6 +595,19 @@ volatile bool Temperature::raw_temps_ready = false;
 
       if (cycles > ncycles && cycles > 2) {
         SERIAL_ECHOLNPGM(STR_PID_AUTOTUNE_FINISHED);
+
+        PID_t tune_pid = pid_array[0];
+        for (int i = 0; i < ncycles; i++) {
+          float minDiff = (pid_array[i].min - current_temp);
+          float maxDiff = (current_temp - pid_array[i].max);
+
+          float minDiffRelevant = (tune_pid.min - current_temp);
+          float maxDiffRelevant = (current_temp - tune_pid.max);
+
+          if (minDiff <= relevantMinDiff && maxDiff <= relevantMaxDiff) {
+            relevant = pid_array[i];
+          }
+        }
 
         #if HAS_PID_FOR_BOTH
           const char * const estring = GHV(PSTR("bed"), NUL_STR);
